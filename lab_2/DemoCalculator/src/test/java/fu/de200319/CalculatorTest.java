@@ -2,12 +2,14 @@ package fu.de200319;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvFileSource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-
 public class CalculatorTest {
     private final Calculator calculator = new Calculator();
+
     @Test
     @DisplayName("add(2,3) trả về 5")
     void add_TwoPositiveNumbers_ReturnsSum() {
@@ -20,6 +22,7 @@ public class CalculatorTest {
         // Assert
         assertEquals(expected, actual, "2 + 3 phải bằng 5");
     }
+
     @Test
     @DisplayName("divide(6,3) trả về 2")
     void divide_ValidDivision_ReturnsQuotient() {
@@ -31,6 +34,7 @@ public class CalculatorTest {
         // Assert
         assertEquals(2, result);
     }
+
     @Test
     @DisplayName("divide(10,0) ném IllegalArgumentException")
     void divide_ByZero_ThrowsIllegalArgumentException() {
@@ -45,4 +49,17 @@ public class CalculatorTest {
         assertEquals("Cannot divide by zero", ex.getMessage());
     }
 
+    @ParameterizedTest(name = "Test {index} => {0} * {1} = {2}")
+    @CsvFileSource(resources = "/data.csv", numLinesToSkip = 1)
+    @DisplayName("multiply: kiểm thử với nhiều bộ dữ liệu từ CSV")
+    void multiply_VariousInputs_ReturnsProduct(int a, int b, int expected) {
+        // Arrange: a, b, expected do JUnit inject từ CSV
+
+        // Act
+        int actual = calculator.multiply(a, b);
+
+        // Assert
+        assertEquals(expected, actual,
+                () -> a + " * " + b + " phải bằng " + expected);
+    }
 }
