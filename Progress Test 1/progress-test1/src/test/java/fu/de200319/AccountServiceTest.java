@@ -4,10 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.*;
 
 import java.time.LocalDate;
 import java.util.Optional;
@@ -109,5 +106,145 @@ class AccountServiceTest {
                 Arguments.of("Ưu tiên 2: Email sai + MK yếu -> Báo INVALID_EMAIL", USER, "bademail", "weak", "weak", DOB, PHONE, ResultCode.INVALID_EMAIL),
                 Arguments.of("Ưu tiên 3: MK yếu + Confirm lệch -> Báo WEAK_PASSWORD", USER, EMAIL, "weak", "x", DOB, PHONE, ResultCode.WEAK_PASSWORD)
         );
+    }
+    @Nested
+    class Login {
+
+        private static final String WRONG = "Wrong@123";
+
+        @BeforeEach
+        void registerUser() {
+            service.register(USER, EMAIL, PASS, PASS, DOB, PHONE);
+        }
+
+        // Rule 6: Đăng nhập đúng -> SUCCESS và reset bộ đếm về 0
+        @Test
+        void login_CorrectCredentials_SuccessAndResetsCounter() {
+            service.login(USER, WRONG); // Tạo 1 lần sai trước đó
+            assertEquals(ResultCode.SUCCESS, service.login(USER, PASS));
+            assertEquals(0, service.findByUsername(USER).get().getFailedAttempts());
+        }
+
+        // Rule 1: User không tồn tại -> INVALID_CREDENTIALS
+        @Test
+        void login_UserNotFound_ReturnsInvalidCredentials() {
+            assertEquals(ResultCode.INVALID_CREDENTIALS, service.login("not_exist", PASS));
+        }
+
+        // Rule 2: Tài khoản DISABLED -> ACCOUNT_DISABLED (dù đúng hay sai mật khẩu)
+        @ParameterizedTest(name = "[{index}] Disabled user login với pass: {0}")
+        @ValueSource(strings = {PASS, WRONG})
+        void login_DisabledAccount_ReturnsAccountDisabled(String pw) {
+            service.disableAccount(USER);
+            assertEquals(ResultCode.ACCOUNT_DISABLED, service.login(USER, pw));
+        }
+
+        // Rule 4: Sai từ 1 đến 4 lần -> INVALID_CREDENTIALS, tăng bộ đếm, chưa khóa
+        @ParameterizedTest(name = "[{index}] Sai {0} lần -> INVALID_CREDENTIALS")
+        @ValueSource(ints = {1, 2, 3, 4})
+        void login_FailedAttemptsUnderThreshold_ReturnsInvalidCredentials(int times) {
+            for (int i = 0; i < times; i++) {
+                assertEquals(ResultCode.INVALID_CREDENTIALS, service.login(USER, WRONG));
+            }
+            Account acc = service.findByUsername(USER).get();
+            assertEquals(times, acc.getFailedAttempts());
+            assertFalse(acc.isLocked());
+        }
+
+        // Rule 5: Sai lần thứ 5 -> ACCOUNT_LOCKED và khóa tài khoản
+        @Test
+        void login_FifthFailedAttempt_LocksAccount() {
+            for (int i = 0; i < 4; i++) service.login(USER, WRONG);
+            ResultCode fifth = service.login(USER, WRONG);
+            assertEquals(ResultCode.ACCOUNT_LOCKED, fifth);
+            assertTrue(service.isLocked(USER));
+        }
+
+        // Rule 3: Đang khóa -> nhập đúng hay sai đều ACCOUNT_LOCKED, bộ đếm không đổi
+        @Test
+        void login_AlreadyLocked_DoesNotIncreaseCounter() {
+            for (int i = 0; i < 5; i++) service.login(USER, WRONG);
+            int attempts = service.findByUsername(USER).get().getFailedAttempts();
+
+            assertEquals(ResultCode.ACCOUNT_LOCKED, service.login(USER, WRONG));
+            assertEquals(ResultCode.ACCOUNT_LOCKED, service.login(USER, PASS));
+            assertEquals(attempts, service.findByUsername(USER).get().getFailedAttempts());
+        }
+
+        // Biên số lần đăng nhập sai: 4 lần rồi đúng -> SUCCESS; 5 lần rồi đúng -> ACCOUNT_LOCKED
+        @ParameterizedTest(name = "[{index}] Sai {0} lần rồi nhập đúng -> {1}, locked={2}")
+        @CsvSource({
+                "4, SUCCESS, false",
+                "5, ACCOUNT_LOCKED, true"
+        })
+        void login_CorrectPasswordAfterFailures(int failures, ResultCode expected, boolean locked) {
+            for (int i = 0; i < failures; i++) service.login(USER, WRONG);
+            assertEquals(expected, service.login(USER, PASS));
+            assertEquals(locked, service.isLocked(USER));
+        }
+
+        // Username không phân biệt hoa/thường
+        @ParameterizedTest(name = "[{index}] Case insensitivity username: {0}")
+        @ValueSource(strings = {"ALICE_01", "Alice_01", "alice_01"})
+        void login_UsernameCaseInsensitive_Success(String inputUser) {
+            assertEquals(ResultCode.SUCCESS, service.login(inputUser, PASS));
+        }
+
+        // Mật khẩu phân biệt hoa/thường
+        @Test
+        void login_PasswordCaseSensitive_Fails() {
+            assertEquals(ResultCode.INVALID_CREDENTIALS, service.login(USER, "secret@123"));
+        }
+
+        // Input rỗng hoặc null
+        @ParameterizedTest
+        @NullAndEmptySource
+        @ValueSource(strings = {"   "})
+        void login_BlankInput_ReturnsInvalidInput(String bad) {
+            assertEquals(ResultCode.INVALID_INPUT, service.login(bad, PASS));
+            assertEquals(ResultCode.INVALID_INPUT, service.login(USER, bad));
+        }
+    }
+
+    @Nested
+    class Admin {
+
+        private static final String WRONG = "Wrong@123";
+
+        @BeforeEach
+        void registerUser() {
+            service.register(USER, EMAIL, PASS, PASS, DOB, PHONE);
+        }
+
+        // Mở khóa: reset bộ đếm về 0 và cho phép đăng nhập lại
+        @Test
+        void unlockAccount_ValidUser_UnlocksAndResetsCounter() {
+            for (int i = 0; i < 5; i++) service.login(USER, WRONG);
+            assertTrue(service.isLocked(USER));
+
+            assertEquals(ResultCode.SUCCESS, service.unlockAccount(USER));
+            assertFalse(service.isLocked(USER));
+            assertEquals(0, service.findByUsername(USER).get().getFailedAttempts());
+
+            assertEquals(ResultCode.SUCCESS, service.login(USER, PASS));
+        }
+
+        @Test
+        void unlockAccount_NotFound_ReturnsUserNotFound() {
+            assertEquals(ResultCode.USER_NOT_FOUND, service.unlockAccount("ghost"));
+            assertEquals(ResultCode.USER_NOT_FOUND, service.unlockAccount(""));
+        }
+
+        @Test
+        void disableAccount_NotFound_ReturnsUserNotFound() {
+            assertEquals(ResultCode.USER_NOT_FOUND, service.disableAccount("ghost"));
+            assertEquals(ResultCode.USER_NOT_FOUND, service.disableAccount(null));
+        }
+
+        @Test
+        void isLocked_UnknownUserOrNull_ReturnsFalse() {
+            assertFalse(service.isLocked("ghost"));
+            assertFalse(service.isLocked(null));
+        }
     }
 }
